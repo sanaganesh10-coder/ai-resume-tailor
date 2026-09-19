@@ -1,11 +1,17 @@
-from openai import OpenAI, RateLimitError
-from dotenv import load_dotenv
+﻿from openai import OpenAI, RateLimitError
 import os
 import json
 
-load_dotenv()
+def get_openai_client():
+    import streamlit as st
+    key = None
+    if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
+        key = st.secrets["OPENAI_API_KEY"]
+    else:
+        key = os.getenv("OPENAI_API_KEY")
+    return OpenAI(api_key=key)
 
-client = OpenAI()
+client = get_openai_client()
 
 SYSTEM_PROMPT = """
 You are an expert resume reviewer and career coach.
@@ -37,37 +43,31 @@ DUMMY_RESULT = {
     ]
 }
 
-def analyze_resume(resume_text: str, jd_text: str) -> dict:
+def analyze_resume(resume_text, job_description_text, use_dummy=True):
+    if use_dummy:
+        return DUMMY_RESULT
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"RESUME:\n{resume_text}\n\nJOB DESCRIPTION:\n{jd_text}"
-                }
+                {"role": "user", "content": f"RESUME:\n{resume_text}\n\nJOB DESCRIPTION:\n{job_description_text}"}
             ],
             temperature=0.3,
+            max_tokens=500
         )
-
-        content = response.choices.message.content.strip()
-        # In case the model adds some extra text, try to extract JSON
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start != -1 and end > start:
-            content = content[start:end]
-
-        return json.loads(content)
-
-    except RateLimitError as e:
-        # No credits / rate limit
-        print("RateLimitError (no credits). Using dummy result.")
-        print("Error:", e)
-        return DUMMY_RESULT
-
+        result_text = response.choices[0].message.content.strip()
+        return json.loads(result_text)
+    except RateLimitError:
+        return {
+            "match_score": -1,
+            "missing_keywords": ["API rate limit reached"],
+            "tailored_bullets": ["Please try again in a few minutes."]
+        }
     except Exception as e:
-        # Any other error
-        print("General error. Using dummy result.")
-        print("Error:", e)
-        return DUMMY_RESULT
+        return {
+            "match_score": -1,
+            "missing_keywords": ["Error during analysis"],
+            "tailored_bullets": [f"Error: {str(e)}"]
+        }
